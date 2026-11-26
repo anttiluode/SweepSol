@@ -3,3 +3,6 @@ trace.json
 sweepsol-trace*.json
 __pycache__/
 *.tmp
+swarm-results.json
+swarm-qwen*.json
+swarm-live*.json
