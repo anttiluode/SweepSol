@@ -35,13 +35,13 @@ const Swarm = (function SwarmFactory(S){
     }
   }
   class Colony{
-    constructor(bank,{roads=new Roads(),geometry=new Geometry(bank),roadWeight=.18,share=.22,sharedDecay=.04,horizon=32,width=90,grain="auto",threshold=.015,maxBeats=160,learn=true,coverage=.35,seed=7}={}){
-      this.b=bank;this.roads=roads;this.geometry=geometry;this.roadWeight=roadWeight;this.share=share;this.sharedDecay=sharedDecay;this.horizon=horizon;this.width=width;this.grain=grain;this.threshold=threshold;this.maxBeats=maxBeats;this.learn=learn;this.coverage=coverage;this.seed=seed;
+    constructor(bank,{roads=new Roads(),geometry=new Geometry(bank),roadWeight=.18,share=.22,sharedDecay=.04,horizon=32,width=90,grain="auto",threshold=.015,maxBeats=160,learn=true,coverage=.35,seed=7,temperature=.01,avoidRevisit=false}={}){
+      this.b=bank;this.roads=roads;this.geometry=geometry;this.roadWeight=roadWeight;this.share=share;this.sharedDecay=sharedDecay;this.horizon=horizon;this.width=width;this.grain=grain;this.threshold=threshold;this.maxBeats=maxBeats;this.learn=learn;this.coverage=coverage;this.seed=seed;this.temperature=temperature;this.avoidRevisit=avoidRevisit;
       this.cover=new Float64Array(bank.words.length);this.agents=[];this.round=0;this.reads=new Set();this.meetings=new Map();this.observers=new Map();this.deposits=[];
     }
     add(start,target=null,seed=this.seed+this.agents.length){
       if(!Number.isInteger(start)||start<0||start>=this.b.words.length||target!==null&&(!Number.isInteger(target)||target<0||target>=this.b.words.length||target===start))throw Error("Invalid start or goal");
-      const w=new S.Walker(this.b,start,{seed,neighbors:this.horizon,width:this.width,grain:this.grain,threshold:this.threshold,coverage:this.coverage,commonUtility:true});
+      const w=new S.Walker(this.b,start,{seed,neighbors:this.horizon,width:this.width,grain:this.grain,threshold:this.threshold,coverage:this.coverage,commonUtility:true,temperature:this.temperature,avoidRevisit:this.avoidRevisit});
       w.neighborhood=band=>this.geometry.neighbors(w.a,band,this.horizon);
       w.scoreBonus=(a,i)=>this.roadWeight*this.roads.bonus(a,i)-this.share*this.cover[i];
       const oracle=target===null?null:S.oracle(this.b,target,0,seed);
@@ -77,7 +77,7 @@ const Swarm = (function SwarmFactory(S){
       return this.agents.some(a=>!a.done);
     }
     result(){
-      return {rounds:this.round,uniqueProbes:this.reads.size,meetings:[...this.meetings].sort((a,b)=>b[1]-a[1]),deposits:this.deposits,agents:this.agents.map(a=>({start:a.start,target:a.target,success:a.success,firstSeen:a.firstSeen,beats:a.beats,calls:a.oracle?.count()||0,empty:a.empty,unique:a.seen.size,path:a.path,trace:a.w.trace}))};
+      return {rounds:this.round,uniqueProbes:this.reads.size,meetings:[...this.meetings].sort((a,b)=>b[1]-a[1]),deposits:this.deposits,agents:this.agents.map(a=>({start:a.start,target:a.target,success:a.success,firstSeen:a.firstSeen,beats:a.beats,calls:a.oracle?.count()||0,empty:a.empty,downhill:a.w.trace.filter(r=>r.downhill).length,unique:a.seen.size,path:a.path,trace:a.w.trace}))};
     }
   }
   function pairs(n,train,test,seed=17){
@@ -90,13 +90,13 @@ const Swarm = (function SwarmFactory(S){
     const ok=rows.filter(a=>a.success),mean=a=>a.length?a.reduce((s,x)=>s+x,0)/a.length:null;
     return {n:rows.length,success:ok.length,successRate:ok.length/rows.length,meanCallsAll:mean(rows.map(a=>a.calls)),meanCallsSuccessful:mean(ok.map(a=>a.calls)),meanBeatsSuccessful:mean(ok.map(a=>a.beats)),meanBudgetedBeats:mean(rows.map(a=>a.success?a.beats:budget)),meanEmptyRate:mean(rows.map(a=>a.empty/a.beats))};
   }
-  function experiment(bank,{train=32,test=32,lanes=4,seed=17,maxBeats=160,horizon=32,width=90,roadWeight=.18,share=.22,grain="auto",threshold=.015,progress=()=>{}}={}){
+  function experiment(bank,{train=32,test=32,lanes=4,seed=17,maxBeats=160,horizon=32,width=90,roadWeight=.18,share=.22,grain="auto",threshold=.015,temperature=.01,avoidRevisit=false,progress=()=>{}}={}){
     if(![train,test,lanes,seed,maxBeats,horizon].every(Number.isInteger)||train<0||test<1||lanes<1||maxBeats<1||horizon<2)throw Error("Invalid experiment options");
     const split=pairs(bank.words.length,train,test,seed),roads=new Roads(),geometry=new Geometry(bank);
     function run(list,arm,learn,weight){
       const rows=[];
       for(let j=0;j<list.length;j+=lanes){
-        const c=new Colony(bank,{roads,geometry,roadWeight:weight,share,horizon,width,grain,threshold,maxBeats,learn,seed});
+        const c=new Colony(bank,{roads,geometry,roadWeight:weight,share,horizon,width,grain,threshold,maxBeats,learn,seed,temperature,avoidRevisit});
         list.slice(j,j+lanes).forEach(([a,b],i)=>c.add(a,b,seed+j+i+1000));
         while(c.step()){}
         rows.push(...c.result().agents);progress({arm,done:rows.length,total:list.length,roads:roads.edges.size});
@@ -108,7 +108,7 @@ const Swarm = (function SwarmFactory(S){
     const off=run(split.test,"no_roads",false,0),on=run(split.test,"roads",false,roadWeight);
     if(JSON.stringify(roads.snapshot())!==frozen)throw Error("Holdout modified frozen roads");
     const paired=on.map((a,i)=>({start:a.start,target:a.target,roads:a.success,noRoads:off[i].success,roadCalls:a.calls,baseCalls:off[i].calls,roadBeats:a.beats,baseBeats:off[i].beats}));
-    return {meta:bank.meta,words:bank.words,config:{train,test,lanes,seed,maxBeats,horizon,width,roadWeight,share,grain,threshold},split,roads:roads.snapshot(),summary:{train:tr.length?aggregate(tr,maxBeats):null,noRoads:aggregate(off,maxBeats),roads:aggregate(on,maxBeats),roadOnly:paired.filter(x=>x.roads&&!x.noRoads).length,baseOnly:paired.filter(x=>!x.roads&&x.noRoads).length,both:paired.filter(x=>x.roads&&x.noRoads).length,geometryComparisons:geometry.comparisons},paired,runs:{train:tr,noRoads:off,roads:on}};
+    return {meta:bank.meta,words:bank.words,config:{train,test,lanes,seed,maxBeats,horizon,width,roadWeight,share,grain,threshold,temperature,avoidRevisit},split,roads:roads.snapshot(),summary:{train:tr.length?aggregate(tr,maxBeats):null,noRoads:aggregate(off,maxBeats),roads:aggregate(on,maxBeats),roadOnly:paired.filter(x=>x.roads&&!x.noRoads).length,baseOnly:paired.filter(x=>!x.roads&&x.noRoads).length,both:paired.filter(x=>x.roads&&x.noRoads).length,geometryComparisons:geometry.comparisons},paired,runs:{train:tr,noRoads:off,roads:on}};
   }
   function selfTest(){
     const b=S.prepare(S.demo()),before=JSON.stringify(b.x),r=new Roads(),g=new Geometry(b);
