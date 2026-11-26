@@ -1,0 +1,71 @@
+<!doctype html>
+<html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>SweepSol Swarm</title><style>
+*{box-sizing:border-box}body{background:#10171e;color:#e1e9ef;font:14px system-ui;margin:0}main{max-width:1450px;margin:auto;padding:20px}h1{font-size:30px;margin:0}h2{font-size:16px;margin:0 0 8px}p,small{color:#a6b6c6;line-height:1.45}.layout{display:grid;grid-template-columns:290px minmax(0,1fr);gap:12px}.panel{background:#19242e;border:1px solid #314251;border-radius:12px;padding:14px;min-width:0}label{display:block;font-size:12px;color:#b6c8d8;margin:10px 0 3px}button,input,select{font:inherit;color:inherit;background:#263646;border:1px solid #425a70;border-radius:6px;padding:7px;max-width:100%}input[type=range]{width:100%;accent-color:#e9ad68;padding:0}button{cursor:pointer}button:hover{background:#374e61}button:disabled{opacity:.5}.bar{display:flex;gap:7px;flex-wrap:wrap;margin:10px 0}.row{display:flex;gap:6px;align-items:center}.row input{width:100%;min-width:0}canvas{width:100%;height:470px;background:#111b24;display:block;border-radius:8px}.stats{display:grid;grid-template-columns:repeat(5,1fr);gap:7px;margin-bottom:10px}.stats div{background:#111b24;padding:9px;border-radius:6px}.stats small{display:block}.stats b{font-size:23px}.scroll{max-height:260px;overflow:auto}table{width:100%;border-collapse:collapse;font-size:12px;text-align:left}td,th{padding:7px 5px;border-bottom:1px solid #30404c}td:last-child{overflow-wrap:anywhere}.split{display:grid;grid-template-columns:1fr 1fr;gap:10px;margin-top:10px}#source{color:#e8ad69}#err{color:#ffa1a1;white-space:pre-wrap}#roads,#meetings{white-space:pre-wrap;font:12px ui-monospace,monospace;line-height:1.6}a{color:#99c4ef}@media(max-width:900px){.layout,.split{grid-template-columns:1fr}.stats{grid-template-columns:repeat(3,1fr)}}
+</style></head><body><main>
+<h1>SweepSol · Swarm</h1><p>Many readers, one frozen map. Share what has been seen, leave roads only after successful journeys, and watch independent paths converge.</p><p><a href="index.html">Single reader</a> · <span id="source"></span></p><div id="err"></div>
+<div class="layout"><section class="panel"><h2>Colony controls</h2>
+<label>Load real Qwen bank.json</label><input id="file" type="file" accept=".json"><button id="demo" style="margin-top:8px">Synthetic toy</button>
+<label>Mode</label><select id="mode"><option value="forage">Forage / no goals</option><option value="random">Random hidden goals / learn roads</option><option value="common">Common hidden goal / learn roads</option><option value="frozen">Common hidden goal / frozen roads</option></select>
+<label>Anchor (first walker; others start elsewhere)</label><input id="start" list="words" value="oak"><label>Common goal (evaluator only)</label><input id="goal" list="words" value="guitar"><datalist id="words"></datalist>
+<label>Walkers <span id="nv"></span></label><input id="n" type="range" min="1" max="16" value="6">
+<label>Local horizon (per grain) <span id="hv"></span></label><input id="h" type="range" min="5" max="100" value="32">
+<label>Beam half-width <span id="wv"></span></label><input id="w" type="range" min="10" max="180" value="90">
+<label>Shared coverage <span id="sv"></span></label><input id="s" type="range" min="0" max="100" value="22">
+<label>Road preference <span id="rv"></span></label><input id="r" type="range" min="0" max="100" value="18">
+<label>Rounds per second <span id="fv"></span></label><input id="f" type="range" min="1" max="20" value="4">
+<label>Maximum beats per walker</label><input id="budget" type="number" min="2" max="2000" value="160">
+<label><input id="repeat" type="checkbox" checked> Start fresh colony when all finish</label>
+<div class="bar"><button id="new">New colony</button><button id="step">Step</button><button id="run">Run</button></div>
+<div class="bar"><button id="clear">Clear roads</button><button id="save">Save trace + roads</button><button id="test">Self-test</button></div>
+<small>New colony retains roads but resets shared coverage. Set shared coverage and road preference to zero for independent walkers (private memories remain). Frozen mode disables road writing. Controls except speed take effect on New colony.</small>
+<div id="testout"></div></section><section class="panel">
+<div class="stats"><div><small>Round</small><b id="round"></b></div><div><small>Unique probes</small><b id="unique"></b></div><div><small>Road edges</small><b id="edges"></b></div><div><small>Successes / batch</small><b id="success"></b></div><div><small>Shared addresses</small><b id="meet"></b></div></div>
+<canvas id="map"></canvas><small>PC1/PC2 projection of normalized cached states. Grey = bank, orange = credited directed roads (lines omit direction), colored = recent committed paths, bright tips = anchors, thin lines = last probes. This view collapses higher dimensions; visual intersections are not necessarily shared addresses.</small>
+<h2 style="margin-top:12px">Walkers</h2><div class="scroll"><table><thead><tr><th>ID</th><th>Anchor</th><th>Last probe</th><th>Evaluator goal</th><th>Calls</th><th>Status</th><th>Recent path</th></tr></thead><tbody id="agents"></tbody></table></div>
+<div class="split"><div><h2>Learned junctions</h2><div id="roads"></div></div><div><h2>Shared observed addresses</h2><div id="meetings"></div></div></div>
+</section></div><p>Explore mode. A road is a reinforced directed transition, not a change to Qwen's weights. A shared address means multiple walkers observed the same token at some time in the current batch, not necessarily simultaneously. This browser is a live workbench; use swarm.js for the frozen, matched train/test experiment.</p></main>
+<script src="engine.js"></script><script src="swarm-core.js"></script><script>
+"use strict";
+const $=id=>document.getElementById(id), colors=["#60cfab","#78adf4","#eea35f","#bf9af1","#ef869a","#b9cf63","#53cddc","#e1c171","#a1b7f5","#ff9eab","#a3dc7e","#c89d6e","#d3b2ff","#a8e0d4","#ecb87b","#95c1a6"];
+let b,roads,geometry,c,random,epoch=0,timer=null,history=[],ranges;
+function stop(){if(timer!==null)clearTimeout(timer);timer=null;$("run").textContent="Run"}
+function safe(fn){return (...a)=>{try{$("err").textContent="";fn(...a)}catch(e){stop();$("err").textContent=e.message||String(e)}}}
+function find(word){const s=word.trim(),i=b.words.indexOf(s);if(i<0)throw Error("Not in bank: "+s);return i}
+function other(exclude){let i;do{i=Math.floor(random()*b.words.length)}while(i===exclude);return i}
+function archive(){if(c&&c.round){history.push({epoch,config:c.config,...c.result()})}}
+function fresh(){archive();epoch++;const mode=$("mode").value,start=find($("start").value),target=mode==="common"||mode==="frozen"?find($("goal").value):null;
+ const budget=Number($("budget").value);if(!Number.isInteger(budget)||budget<2||budget>2000)throw Error("Budget must be 2–2000");
+ const config={mode,roadWeight:+$("r").value/100,share:+$("s").value/100,horizon:+$("h").value,width:+$("w").value,maxBeats:budget,learn:mode==="random"||mode==="common",seed:17+epoch*100};
+ c=new Swarm.Colony(b,{roads,geometry,...config});c.config=config;
+ for(let j=0;j<+$("n").value;j++){let a=j===0?start:other(target),t=mode==="random"?other(a):target;if(a===t)a=other(t);c.add(a,t,config.seed+j)}
+ draw();
+}
+function load(raw){stop();b=Sweep.prepare(raw);roads=new Swarm.Roads();geometry=new Swarm.Geometry(b);random=Swarm.rng(97);history=[];epoch=0;c=null;
+ $("source").textContent=(b.meta.source||"Imported bank")+" · "+b.words.length+" words · "+b.d+" dimensions · layer "+(b.meta.layer??"n/a");
+ $("words").replaceChildren(...b.words.map(w=>new Option(w)));if(!b.words.includes($("start").value))$("start").value=b.words[0];if(!b.words.includes($("goal").value))$("goal").value=b.words[1];
+ ranges=[0,1].map(j=>{let lo=Infinity,hi=-Infinity;for(const v of b.x){lo=Math.min(lo,v[j]);hi=Math.max(hi,v[j])}return [lo,hi]});
+ fresh();
+}
+function tick(){if(c.agents.every(a=>a.done)){if(!$("repeat").checked){stop();return false}fresh()}c.step();draw();return true}
+function loop(){try{if(tick())timer=setTimeout(loop,1000/+$("f").value)}catch(e){stop();$("err").textContent=e.message||String(e)}}
+function draw(){
+ $("round").textContent=c.round;$("unique").textContent=c.reads.size;$("edges").textContent=roads.edges.size;$("success").textContent=c.agents.filter(a=>a.success).length+"/"+c.agents.length;$("meet").textContent=c.meetings.size;
+ const tbody=$("agents");tbody.replaceChildren(...c.agents.map(a=>{let tr=document.createElement("tr"),last=a.w.trace.at(-1),vals=[a.id+1,b.words[a.w.a],last?.probe==null?"—":b.words[last.probe],a.target===null?"—":b.words[a.target],a.oracle?.count()||0,a.success?"Reached":a.done?"Budget":last?.probe===null?"Blind":"Reading",a.path.slice(-8).map(i=>b.words[i]).join(" → ")];vals.forEach((v,j)=>{let td=document.createElement("td");td.textContent=v;if(j===0)td.style.color=colors[a.id%colors.length];tr.append(td)});return tr}));
+ $("roads").textContent=[...roads.junctions].sort((a,b)=>b[1]-a[1]).slice(0,15).map(([i,n])=>b.words[i]+"  ·  "+n+" paths").join("\n")||"No successful interior road nodes yet.";
+ $("meetings").textContent=[...c.meetings].sort((a,b)=>b[1]-a[1]).slice(0,15).map(([i,n])=>b.words[i]+"  ·  "+n+" walkers").join("\n")||"No shared observations yet.";
+ const cv=$("map"),rect=cv.getBoundingClientRect(),dpr=devicePixelRatio||1;cv.width=Math.max(1,Math.round(rect.width*dpr));cv.height=Math.max(1,Math.round(rect.height*dpr));const g=cv.getContext("2d");g.scale(dpr,dpr);const W=rect.width,H=rect.height;
+ const xy=i=>[20+(W-40)*(b.x[i][0]-ranges[0][0])/(ranges[0][1]-ranges[0][0]||1),H-20-(H-40)*(b.x[i][1]-ranges[1][0])/(ranges[1][1]-ranges[1][0]||1)];
+ const line=(i,j,color,width)=>{const [x,y]=xy(i),[u,v]=xy(j);g.strokeStyle=color;g.lineWidth=width;g.beginPath();g.moveTo(x,y);g.lineTo(u,v);g.stroke()};
+ g.fillStyle="#7893aa30";for(let i=0;i<b.words.length;i++){const [x,y]=xy(i);g.fillRect(x,y,1.5,1.5)}
+ for(const [k,n] of roads.edges){const [i,j]=k.split(":").map(Number);line(i,j,"#eba85f88",Math.min(4,.6+Math.log1p(n)))}
+ for(const a of c.agents){const color=colors[a.id%colors.length],p=a.path.slice(-35);for(let i=1;i<p.length;i++)line(p[i-1],p[i],color+"99",1.4);
+ const last=a.w.trace.at(-1);if(last?.probe!=null)line(last.anchor,last.probe,color+"66",.9);
+ const [x,y]=xy(a.w.a);g.fillStyle=color;g.beginPath();g.arc(x,y,5,0,Math.PI*2);g.fill();g.font="bold 11px system-ui";g.fillText((a.id+1)+" "+b.words[a.w.a],x+7,y-4)}
+}
+$("file").onchange=async e=>{try{if(e.target.files[0])load(JSON.parse(await e.target.files[0].text()))}catch(e){$("err").textContent=e.message}};
+$("demo").onclick=safe(()=>load(Sweep.demo()));$("new").onclick=safe(()=>{stop();fresh()});$("step").onclick=safe(()=>{stop();tick()});$("run").onclick=safe(()=>{if(timer!==null)stop();else{$("run").textContent="Pause";loop()}});
+$("clear").onclick=safe(()=>{stop();roads=new Swarm.Roads();fresh()});$("test").onclick=safe(()=>{$("testout").textContent=Swarm.selfTest().checks.join(" · ")});
+$("save").onclick=safe(()=>{const data={meta:b.meta,words:b.words,roads:roads.snapshot(),history:[...history,{epoch,config:c.config,...c.result()}]};const url=URL.createObjectURL(new Blob([JSON.stringify(data)],{type:"application/json"}));const a=document.createElement("a");a.href=url;a.download="swarm-live.json";a.click();setTimeout(()=>URL.revokeObjectURL(url),1000)});
+for(const id of ["n","h","w","s","r","f"]){const update=()=>$(id+"v").textContent=$(id).value;$(id).oninput=update;update()}
+window.addEventListener("resize",()=>{if(c)draw()});load(Sweep.demo());
+</script></body></html>
