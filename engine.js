@@ -30,7 +30,7 @@ const Sweep = (function SweepCore(){
   }
   // Metropolis-style acceptance, using the observed reward difference only.
   function decision(delta,T,threshold,random){
-    if(delta>threshold)return {accept:true,downhill:false,probability:1};
+    if(delta>threshold||(T>0&&delta>0))return {accept:true,downhill:false,probability:1};
     const probability=T>0&&delta<=0?Math.exp(delta/T):0;
     return {accept:probability>0&&random()<probability,downhill:delta<0,probability};
   }
