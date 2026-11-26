@@ -1,0 +1,73 @@
+<!doctype html>
+<html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
+<title>SweepSol | A moving reader</title>
+<style>
+*{box-sizing:border-box}body{margin:0;background:#11171e;color:#e4e8ed;font:15px system-ui,sans-serif}main{max-width:1250px;margin:auto;padding:24px}h1{font-size:30px;margin:0}h2{font-size:17px;margin:0 0 10px}p{line-height:1.5;color:#aab6c3}button,input,select{font:inherit;color:inherit;background:#222e3c;border:1px solid #415269;border-radius:6px;padding:7px}button{cursor:pointer}button:hover{background:#34465b}input[type=range]{width:100%;padding:0;accent-color:#e9ac63}label{display:block;color:#b7c4d1;margin-top:10px;font-size:13px}.layout{display:grid;grid-template-columns:300px 1fr;gap:16px}.panel{background:#19222c;border:1px solid #303f4d;border-radius:12px;padding:15px;min-width:0}.bar{display:flex;gap:7px;flex-wrap:wrap;margin:12px 0}.tag{font-size:12px;color:#e9ac63}.status{display:grid;grid-template-columns:repeat(4,1fr);gap:8px;margin-bottom:10px}.status div{background:#101920;padding:10px;border-radius:6px;overflow-wrap:anywhere}.status small{display:block;color:#9ba9b7}.status strong{font-size:19px}canvas{display:block;width:100%;height:410px;background:#101920;border-radius:8px}.legend{font-size:12px;margin:8px 0;color:#aab6c3}#log{height:230px;overflow:auto;font:12px ui-monospace,monospace;white-space:pre-wrap;overflow-wrap:anywhere}#source{color:#e9ac63}#error{color:#ff9999;white-space:pre-wrap}.row{display:flex;gap:6px;align-items:center}.row input{min-width:0;flex:1;width:100%}@media(max-width:800px){.layout{grid-template-columns:1fr}.status{grid-template-columns:repeat(2,1fr)}main{padding:12px}}
+</style></head><body><main>
+<h1>SweepSol</h1><p>Look without moving. Move only after observing. Explore a frozen representation using an anchored, alternating reader with an independently steered fast state.</p>
+<div id="source"></div><div id="error" role="alert"></div>
+<div class="layout"><section class="panel">
+<h2>Workbench</h2>
+<label>Load a model bank (.json)<input type="file" id="file" accept=".json,application/json"></label>
+<button id="demo" style="margin-top:8px">Load synthetic toy</button>
+<label>Anchor word</label><div class="row"><input id="start" value="oak" list="words"><button id="reset">Reset</button></div>
+<datalist id="words"></datalist>
+<label>Mode</label><select id="mode"><option value="forage">Forage / no goal</option><option value="chase">Pursuit / scalar only</option></select>
+<label>Evaluator's target (not given to the walker)</label><div class="row"><input id="target" value="sauna" list="words"><button id="retarget">Apply</button></div>
+<label>Grain</label><select id="grain"><option value="auto">Adaptive</option></select>
+<label>Beam half-width <span id="widthv"></span><input type="range" id="width" min="5" max="180" value="60"></label>
+<label>Side offset <span id="offsetv"></span><input type="range" id="offset" min="0" max="90" value="30"></label>
+<label>Beats / second <span id="ratev"></span><input type="range" id="rate" min="1" max="20" value="4"></label>
+<label>Coverage penalty <span id="covv"></span><input type="range" id="cov" min="0" max="100" value="35"></label>
+<label>Commit threshold <span id="thrv"></span><input type="range" id="thr" min="0" max="100" value="15"></label>
+<label>Scalar noise <span id="noisev"></span><input type="range" id="noise" min="0" max="20" value="0"></label>
+<label><input type="checkbox" id="auto" checked> Automatic commit after two probes</label>
+<div class="bar"><button id="step">Step</button><button id="run">Run</button><button id="commit">Commit</button></div>
+<div class="bar"><button id="save">Download trace</button><button id="test">Self-test</button></div>
+<div class="tag" id="tests"></div>
+</section><section class="panel">
+<div class="status"><div><small>Anchor</small><strong id="a"></strong></div><div><small>Probe</small><strong id="p"></strong></div><div><small>Unique probes</small><strong id="count"></strong></div><div><small>Fast-axis offset</small><strong id="angle"></strong></div></div>
+<canvas id="map"></canvas><div class="legend">Local tangent plane (not PCA scatter): blue = heading, gold = actual probe, purple = fast axis, green = committed anchor. The center is the current anchor. Grey points are candidates; faint points have little planar projection.</div>
+<div id="stats" class="legend"></div><h2>Live trace</h2><div id="log"></div>
+</section></div>
+<p>Mechanisms are inspired by KyberDyyni1, Maatuska and ConjunctionReservoir. The browser needs no server. The toy map is hand authored; use a locally exported model bank for a real exploration. This is an instrument, not a claim of improved reasoning.</p>
+</main><script src="engine.js"></script><script>
+"use strict";
+const $=id=>document.getElementById(id);
+let b,w,oracle=null,timer=null,epoch=0,events=[],last=null;
+const error=e=>{$("error").textContent=String(e.message||e)};
+function find(s){let i=b.words.indexOf(s.trim());if(i<0)i=b.words.findIndex(x=>x.toLowerCase()===s.trim().toLowerCase());if(i<0)throw Error("Word not in bank: "+s);return i}
+function opts(){return {width:+$("width").value,offset:+$("offset").value,grain:$("grain").value,coverage:+$("cov").value/100,threshold:+$("thr").value/1000,autoCommit:$("auto").checked}}
+function stop(){if(timer!==null)clearTimeout(timer);timer=null;$("run").textContent="Run"}
+function attachReward(){epoch++;const i=$("mode").value==="chase"?find($("target").value):null;oracle=i===null?null:Sweep.oracle(b,i,+$("noise").value/100,7+epoch);w.setReward(oracle?j=>oracle.read(j):null);events.push({event:"mode_or_target",beat:w.t,mode:$("mode").value,evaluator_target:i===null?null:b.words[i],noise:+$("noise").value/100,epoch});}
+function reset(){stop();$("error").textContent="";events=[];last=null;epoch=0;w=new Sweep.Walker(b,find($("start").value),opts());attachReward();draw()}
+function load(raw){stop();b=Sweep.prepare(raw);$("source").textContent=(b.meta.source||"Imported bank")+" | "+b.words.length+" words | "+b.d+" cached dimensions | layer "+(b.meta.layer??"n/a");$("words").replaceChildren(...b.words.map(s=>{let o=document.createElement("option");o.value=s;return o}));$("grain").replaceChildren(new Option("Adaptive","auto"),...b.bands.map((x,i)=>new Option(x.name,String(i))));if(!b.words.includes($("start").value))$("start").value=b.words[0];if(!b.words.includes($("target").value))$("target").value=b.words[b.words.length-1];reset()}
+function tick(){Object.assign(w.opts,opts());last=w.step();last.epoch=epoch;last.options={...opts()};last.oracleCalls=oracle?.count()??0;draw()}
+function loop(){try{tick();timer=setTimeout(loop,1000/+$("rate").value)}catch(e){stop();error(e)}}
+function dot(a,b){return a.reduce((s,v,i)=>s+v*b[i],0)}
+function draw(){
+  $("a").textContent=b.words[w.a];$("p").textContent=last?.probe==null?"—":b.words[last.probe];$("count").textContent=w.visited.size;$("angle").textContent=(last?.axisOffset??0).toFixed(1)+"°";
+  for(const [id,s] of [["width","°"],["offset","°"],["rate"," Hz"],["cov","%"],["thr","/1000"],["noise","%"]])$(id+"v").textContent=$(id).value+s;
+  $("stats").textContent="Beat "+w.t+" · "+b.bands[w.band].name+" · scalar calls this epoch "+(oracle?.count()??0)+" · anchor warmth "+(w.anchorReward?.toFixed(3)??"—")+" · band observations "+w.bandStats.map((s,i)=>b.bands[i].name+": "+s.n).join(" | ");
+  $("log").textContent=w.trace.slice(-80).map(r=>r.event?("MANUAL COMMIT "+b.words[r.anchor]+" → "+b.words[r.after]):("#"+r.beat+" "+(r.side===1?"L":"R")+" "+b.words[r.anchor]+" → look "+(r.probe==null?"[empty]":b.words[r.probe])+" | "+b.bands[r.band].name+(r.reward==null?"":" | warmth "+r.reward.toFixed(3))+(r.commit?" | COMMIT "+b.words[r.after]:""))).reverse().join("\n");
+  const c=$("map"),dpr=devicePixelRatio||1,rect=c.getBoundingClientRect();c.width=Math.round(rect.width*dpr);c.height=Math.round(rect.height*dpr);const g=c.getContext("2d");g.scale(dpr,dpr);const W=rect.width,H=rect.height,cx=W/2,cy=H/2,R=Math.min(W,H)*.40;
+  g.strokeStyle="#2e4252";g.lineWidth=1;for(let j=1;j<=4;j++){g.beginPath();g.arc(cx,cy,R*j/4,0,Math.PI*2);g.stroke()}
+  const plane=w.plane, candidates=w.cands||[];if(plane){
+    const axis=plane.axis,side=plane.side;
+    function ray(t,r,color){g.beginPath();g.moveTo(cx,cy);g.lineTo(cx+r*Math.cos(t),cy-r*Math.sin(t));g.strokeStyle=color;g.lineWidth=2;g.stroke()}
+    let s=(last?.side??1)*w.opts.offset*Math.PI/180, width=w.opts.width*Math.PI/180;
+    g.beginPath();g.moveTo(cx,cy);g.arc(cx,cy,R,-s-width,-s+width);g.closePath();g.fillStyle="#dfa85c22";g.fill();
+    ray(s,R,"#e6ac64");ray(0,R*.85,"#b48ce0");
+    if(w.heading)ray(Math.atan2(dot(w.heading,side),dot(w.heading,axis)),R*.70,"#6ba8e6");
+    for(const v of candidates){let x=cx+R*dot(v.u,axis),y=cy-R*dot(v.u,side),hit=last?.probe===v.i;g.fillStyle=hit?"#ffc174":"#72879a";g.globalAlpha=hit?1:.25+.55*Math.hypot(dot(v.u,axis),dot(v.u,side));g.beginPath();g.arc(x,y,hit?5:2.6,0,Math.PI*2);g.fill();if(hit||candidates.indexOf(v)<10){g.font="11px system-ui";g.fillText(b.words[v.i],x+5,y-4)}g.globalAlpha=1}
+    if(last?.commit){g.fillStyle="#a5b7c5";g.font="12px system-ui";g.fillText("Previous anchor's probe frame (commit just occurred)",10,18)}
+  }
+  g.fillStyle="#6ec995";g.beginPath();g.arc(cx,cy,6,0,Math.PI*2);g.fill();g.font="bold 13px system-ui";g.fillText(last?.commit?b.words[last.anchor]:b.words[w.a],cx+10,cy+15)
+}
+function safe(fn){return (...a)=>{try{$("error").textContent="";fn(...a)}catch(e){stop();error(e)}}}
+$("file").onchange=async e=>{try{const f=e.target.files[0];if(f)load(JSON.parse(await f.text()))}catch(err){error(err)}};
+$("demo").onclick=safe(()=>load(Sweep.demo()));$("reset").onclick=safe(reset);$("mode").onchange=safe(()=>{attachReward();draw()});$("retarget").onclick=safe(()=>{attachReward();draw()});$("step").onclick=safe(()=>{stop();tick()});$("run").onclick=safe(()=>{if(timer!==null)stop();else{$("run").textContent="Pause";loop()}});$("commit").onclick=safe(()=>{if(!w.manualCommit())$("error").textContent="Manual commit is available after a completed probe pair.";draw()});
+$("save").onclick=()=>{const blob=new Blob([JSON.stringify({meta:b.meta,words:b.words,bands:b.bands,events,trace:w.trace},null,2)],{type:"application/json"});const url=URL.createObjectURL(blob);const a=document.createElement("a");a.href=url;a.download="sweepsol-trace.json";a.click();setTimeout(()=>URL.revokeObjectURL(url),1000)};
+$("test").onclick=safe(()=>{$("tests").textContent=Sweep.selfTest().checks.join(" · ")});
+for(const id of ["width","offset","rate","cov","thr","noise","grain","auto"])$(id).oninput=()=>{Object.assign(w.opts,opts());draw()};window.addEventListener("resize",()=>{if(w)draw()});load(Sweep.demo());
+</script></body></html>
