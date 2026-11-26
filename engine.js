@@ -35,11 +35,12 @@ const Sweep = (function SweepCore(){
       this.band=0;this.bandStats=bank.bands.map(()=>({n:0,v:0}));this.reward=null;this.anchorReward=null;
       this.opts={width:60,offset:30,neighbors:64,decay:.04,coverage:.35,learn:.7,threshold:.015,grain:"auto",autoCommit:true,...opts};
     }
-    setReward(fn){this.reward=fn;this.anchorReward=fn?fn(this.a):null;this.pair=[];this.side=1;this.fast=this.heading?this.heading.slice():null;this.stall=0;}
+    setReward(fn){this.reward=fn;this.anchorReward=fn?fn(this.a):null;this.pair=[];this.side=1;this.lastCandidate=null;this.fast=this.heading?this.heading.slice():null;this.stall=0;}
     chooseBand(){
       if(this.opts.grain!=="auto")return +this.opts.grain;
       const k=Math.floor(this.t/2),s=this.bandStats;
-      if(k<s.length||k%4===0)return Math.floor(k/4+k)%s.length;
+      if(k<s.length)return k;
+      if(k%4===0)return Math.floor(k/4)%s.length;
       return s.reduce((best,v,i)=>v.v+.08/Math.sqrt(v.n+1)>s[best].v+.08/Math.sqrt(s[best].n+1)?i:best,0);
     }
     neighborhood(band){
@@ -110,7 +111,10 @@ const Sweep = (function SweepCore(){
     }
     manualCommit(){
       if(!this.lastCandidate||this.pair.length)return false;
-      return this.commit(this.lastCandidate.i,this.lastCandidate.reward);
+      const old=this.a,i=this.lastCandidate.i;
+      const ok=this.commit(i,this.lastCandidate.reward);
+      if(ok)this.trace.push({event:"manual_commit",beat:this.t,anchor:old,after:i});
+      this.lastCandidate=null;return ok;
     }
   }
   function selfTest(){
