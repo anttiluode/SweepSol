@@ -13,6 +13,8 @@
 <label>Shared coverage <span id="sv"></span></label><input id="s" type="range" min="0" max="100" value="22">
 <label>Road preference <span id="rv"></span></label><input id="r" type="range" min="0" max="100" value="18">
 <label>Rounds per second <span id="fv"></span></label><input id="f" type="range" min="1" max="20" value="4">
+<label>Base temperature (0 = cold) <span id="tv"></span><input id="t" type="range" min="0" max="100" value="10">
+<label><input id="avoid" type="checkbox"> Avoid previous anchors</label>
 <label>Maximum beats per walker</label><input id="budget" type="number" min="2" max="2000" value="160">
 <label><input id="repeat" type="checkbox" checked> Start fresh colony when all finish</label>
 <div class="bar"><button id="new">New colony</button><button id="step">Step</button><button id="run">Run</button></div>
@@ -21,7 +23,7 @@
 <div id="testout"></div></section><section class="panel">
 <div class="stats"><div><small>Round</small><b id="round"></b></div><div><small>Unique probes</small><b id="unique"></b></div><div><small>Road edges</small><b id="edges"></b></div><div><small>Successes / batch</small><b id="success"></b></div><div><small>Shared addresses</small><b id="meet"></b></div></div>
 <canvas id="map"></canvas><small>PC1/PC2 projection of normalized cached states. Grey = bank, orange = credited directed roads (lines omit direction), colored = recent committed paths, bright tips = anchors, thin lines = last probes. This view collapses higher dimensions; visual intersections are not necessarily shared addresses.</small>
-<h2 style="margin-top:12px">Walkers</h2><div class="scroll"><table><thead><tr><th>ID</th><th>Anchor</th><th>Last probe</th><th>Evaluator goal</th><th>Calls</th><th>Status</th><th>Recent path</th></tr></thead><tbody id="agents"></tbody></table></div>
+<h2 style="margin-top:12px">Walkers</h2><div class="scroll"><table><thead><tr><th>ID</th><th>Anchor</th><th>Last probe</th><th>Evaluator goal</th><th>Calls</th><th>Temperature</th><th>Downhill</th><th>Status</th><th>Recent path</th></tr></thead><tbody id="agents"></tbody></table></div>
 <div class="split"><div><h2>Learned junctions</h2><div id="roads"></div></div><div><h2>Shared observed addresses</h2><div id="meetings"></div></div></div>
 </section></div><p>Explore mode. A road is a reinforced directed transition, not a change to Qwen's weights. A shared address means multiple walkers observed the same token at some time in the current batch, not necessarily simultaneously. This browser is a live workbench; use swarm.js for the frozen, matched train/test experiment.</p></main>
 <script src="engine.js"></script><script src="swarm-core.js"></script><script>
@@ -35,7 +37,7 @@ function other(exclude){let i;do{i=Math.floor(random()*b.words.length)}while(i==
 function archive(){if(c&&c.round){history.push({epoch,config:c.config,...c.result()})}}
 function fresh(){archive();epoch++;const mode=$("mode").value,start=find($("start").value),target=mode==="common"||mode==="frozen"?find($("goal").value):null;
  const budget=Number($("budget").value);if(!Number.isInteger(budget)||budget<2||budget>2000)throw Error("Budget must be 2–2000");
- const config={mode,roadWeight:+$("r").value/100,share:+$("s").value/100,horizon:+$("h").value,width:+$("w").value,maxBeats:budget,learn:mode==="random"||mode==="common",seed:17+epoch*100};
+ const config={mode,roadWeight:+$("r").value/100,share:+$("s").value/100,horizon:+$("h").value,width:+$("w").value,maxBeats:budget,temperature:+$("t").value/1000,avoidRevisit:$("avoid").checked,learn:mode==="random"||mode==="common",seed:17+epoch*100};
  c=new Swarm.Colony(b,{roads,geometry,...config});c.config=config;
  for(let j=0;j<+$("n").value;j++){let a=j===0?start:other(target),t=mode==="random"?other(a):target;if(a===t)a=other(t);c.add(a,t,config.seed+j)}
  draw();
@@ -50,7 +52,7 @@ function tick(){if(c.agents.every(a=>a.done)){if(!$("repeat").checked){stop();re
 function loop(){try{if(tick())timer=setTimeout(loop,1000/+$("f").value)}catch(e){stop();$("err").textContent=e.message||String(e)}}
 function draw(){
  $("round").textContent=c.round;$("unique").textContent=c.reads.size;$("edges").textContent=roads.edges.size;$("success").textContent=c.agents.filter(a=>a.success).length+"/"+c.agents.length;$("meet").textContent=c.meetings.size;
- const tbody=$("agents");tbody.replaceChildren(...c.agents.map(a=>{let tr=document.createElement("tr"),last=a.w.trace.at(-1),vals=[a.id+1,b.words[a.w.a],last?.probe==null?"—":b.words[last.probe],a.target===null?"—":b.words[a.target],a.oracle?.count()||0,a.success?"Reached":a.done?"Budget":last?.probe===null?"Blind":"Reading",a.path.slice(-8).map(i=>b.words[i]).join(" → ")];vals.forEach((v,j)=>{let td=document.createElement("td");td.textContent=v;if(j===0)td.style.color=colors[a.id%colors.length];tr.append(td)});return tr}));
+ const tbody=$("agents");tbody.replaceChildren(...c.agents.map(a=>{let tr=document.createElement("tr"),last=a.w.trace.at(-1),vals=[a.id+1,b.words[a.w.a],last?.probe==null?"—":b.words[last.probe],a.target===null?"—":b.words[a.target],a.oracle?.count()||0,a.w.temp.toFixed(3),a.w.trace.filter(r=>r.downhill).length,a.success?"Reached":a.done?"Budget":last?.probe===null?"Blind":"Reading",a.path.slice(-8).map(i=>b.words[i]).join(" → ")];vals.forEach((v,j)=>{let td=document.createElement("td");td.textContent=v;if(j===0)td.style.color=colors[a.id%colors.length];tr.append(td)});return tr}));
  $("roads").textContent=[...roads.junctions].sort((a,b)=>b[1]-a[1]).slice(0,15).map(([i,n])=>b.words[i]+"  ·  "+n+" paths").join("\n")||"No successful interior road nodes yet.";
  $("meetings").textContent=[...c.meetings].sort((a,b)=>b[1]-a[1]).slice(0,15).map(([i,n])=>b.words[i]+"  ·  "+n+" walkers").join("\n")||"No shared observations yet.";
  const cv=$("map"),rect=cv.getBoundingClientRect(),dpr=devicePixelRatio||1;cv.width=Math.max(1,Math.round(rect.width*dpr));cv.height=Math.max(1,Math.round(rect.height*dpr));const g=cv.getContext("2d");g.scale(dpr,dpr);const W=rect.width,H=rect.height;
@@ -66,6 +68,6 @@ $("file").onchange=async e=>{try{if(e.target.files[0])load(JSON.parse(await e.ta
 $("demo").onclick=safe(()=>load(Sweep.demo()));$("new").onclick=safe(()=>{stop();fresh()});$("step").onclick=safe(()=>{stop();tick()});$("run").onclick=safe(()=>{if(timer!==null)stop();else{$("run").textContent="Pause";loop()}});
 $("clear").onclick=safe(()=>{stop();roads=new Swarm.Roads();fresh()});$("test").onclick=safe(()=>{$("testout").textContent=Swarm.selfTest().checks.join(" · ")});
 $("save").onclick=safe(()=>{const data={meta:b.meta,words:b.words,roads:roads.snapshot(),history:[...history,{epoch,config:c.config,...c.result()}]};const url=URL.createObjectURL(new Blob([JSON.stringify(data)],{type:"application/json"}));const a=document.createElement("a");a.href=url;a.download="swarm-live.json";a.click();setTimeout(()=>URL.revokeObjectURL(url),1000)});
-for(const id of ["n","h","w","s","r","f"]){const update=()=>$(id+"v").textContent=$(id).value;$(id).oninput=update;update()}
+for(const id of ["n","h","w","s","r","f","t"]){const update=()=>$(id+"v").textContent=$(id).value;$(id).oninput=update;update()}
 window.addEventListener("resize",()=>{if(c)draw()});load(Sweep.demo());
 </script></body></html>
