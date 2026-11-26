@@ -78,3 +78,25 @@ node swarm.js --bank bank.json --train 32 --test 32 --lanes 4 --beats 160 --hori
 Training pairs are sampled reproducibly; the same unordered endpoint pair cannot occur in both training and test. Endpoints and intermediate words can recur across the split. Training learns roads from successful paths only. The test runs exactly the same ordered pairs, seeds, shared coverage, local horizon and beat budget twice, with road preference zero and with the learned roads enabled. The road table is frozen in both test arms. Read success counts, scalar calls for all trials, budgeted beats, and paired road-only / baseline-only successes together (successful-only means are selection-biased). The run records all paths and probe traces, the split, and the complete road table. The local horizon is per grain, not a fixed global graph. Neighbour discovery still scans the bank on cache misses, so scalar calls are not a total compute or latency measure.
 
 This is exploratory; it is not a claim of improvement, nor a test of independent task rewards. Random pairs may be disconnected or hard, and a sparse global road table may generalize poorly or distract the walker. The small synthetic self-test (4 train/4 test pairs) returned 2 training successes and 3/4 successes in each test arm with identical paired outcomes. The eight wiring checks passed, but real Qwen swarm results and browser end-to-end behavior are not yet measured here. The older single-walker defaults are unchanged; the swarm opts into common-space forage utility to avoid cross-band raw cosine comparisons.
+
+
+## Temperature update and the map-before-reader result
+
+See our independent companion repository **[Sweep](https://github.com/anttiluode/Sweep)**, particularly [fields.py and its Qwen report](https://github.com/anttiluode/Sweep/tree/main/runs/fields_qwen_h20) and [the Pythia checkpoint experiment](https://github.com/anttiluode/Sweep/tree/main/runs/develop_pythia-410m_h20).
+
+SweepSol now exposes base temperature in both browser pages. Zero gives cold commitment; a nonzero base temperature allows observed downhill reward steps by Metropolis-style acceptance, heats when progress stalls, and cools on positive commits. Forage additionally uses temperature to sample candidate scores (Gumbel-max) and adjusts heat based on recent anchor repetition. The optional avoid-previous-anchors switch is independent. The swarm runner accepts `--temperature 0.01` and `--avoid-revisit 1`; use `--temperature 0` for a cold comparison. Each trace records temperature, reward delta, downhill commits and eligible candidate count. The controller uses scalar feedback, not target coordinates.
+
+Also changed: forage utility defaults to a common full cached-space cosine, so raw narrow-band cosine is no longer used to compare band utilities; negative probe scores cannot automatically trigger forage commitment; the side axis uses centered candidate residuals before falling back to the old construction. This last change is an exploratory mitigation, not a proven fix for right-side blindness. The sector still may be empty. Original pre-temperature implementation is preserved in git history.
+
+```powershell
+git pull
+start index.html
+start swarm.html
+node swarm.js --self-test
+node swarm.js --bank bank.json --train 32 --test 32 --temperature 0.01 --out swarm-qwen-warm.json
+node swarm.js --bank bank.json --train 32 --test 32 --temperature 0 --out swarm-qwen-cold.json
+```
+
+Sweep's independent checkpoint results distinguish geometric navigability (already high at random initialization) from mature-map consistency (final-map step cosine rises from 0.003 at step0 to 0.270 at step512, 0.369 at step1000, and 0.484 at step143000). These numbers are from Sweep, not a reproduction by SweepSol. Final-map cosine is a geometric proxy, not a language-model judgement of the meaning of an individual step. The same 300 pairs were selected using the final map; successful temperature paths only were scored.
+
+Updated engine and swarm synthetic checks were run against the committed sources; both browser inline scripts and CLI parsed. Real-bank performance and browser end-to-end behavior of the update remain unmeasured. This is an independent port of the acceptance principle, not an exact reproduction of Sweep's Python algorithm.
