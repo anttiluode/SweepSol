@@ -77,7 +77,7 @@ const Sweep = (function SweepCore(){
         if(length<1e-8)continue;
         const delta=Math.atan2(Math.sin(Math.atan2(v,h)-theta),Math.cos(Math.atan2(v,h)-theta));
         if(Math.abs(delta)>o.width*Math.PI/180)continue;
-        const score=.55*c.sim+.30*length+.15*Math.cos(delta)-o.coverage*this.cover[c.i];
+        const score=.55*c.sim+.30*length+.15*Math.cos(delta)-o.coverage*this.cover[c.i]+(this.scoreBonus?this.scoreBonus(this.a,c.i):0);
         if(score>best){best=score;hit={...c,score,delta,prior:this.cover[c.i]}}
       }
       const old=this.a, rec={beat:this.t++,anchor:old,side:sgn,band:this.band,probe:hit?.i??null,score:hit?.score??null,reward:null,commit:false,after:old,axisOffset:angle(this.heading,axis),width:o.width};
@@ -96,8 +96,9 @@ const Sweep = (function SweepCore(){
             hits.sort((a,b)=>b.reward-a.reward);
             utility=hits[0].reward-this.anchorReward;
           }else{
-            hits.sort((a,b)=>(b.sim-.3*b.prior)-(a.sim-.3*a.prior));
-            utility=hits[0].sim-.3*hits[0].prior;
+            const value=h=>(o.commonUtility?dot(this.b.x[this.a],this.b.x[h.i]):h.sim)-.3*h.prior;
+            hits.sort((a,b)=>value(b)-value(a));
+            utility=value(hits[0]);
           }
           const h=hits[0], eligible=this.reward?utility>o.threshold:utility>o.threshold;
           if(o.autoCommit&&eligible){rec.commit=this.commit(h.i,h.reward);rec.commitProbe=h.i;}
