@@ -28,14 +28,20 @@ const Sweep = (function SweepCore(){
     let t=target, calls=0;const r=rnd(seed);
     return {read(i){calls++;return clip((1+dot(bank.x[i],bank.x[t]))/2+noise*(2*r()-1),0,1)}, retarget(i){t=i},count(){return calls},truth(i){return (1+dot(bank.x[i],bank.x[t]))/2}};
   }
+  // Metropolis-style acceptance, using the observed reward difference only.
+  function decision(delta,T,threshold,random){
+    if(delta>threshold)return {accept:true,downhill:false,probability:1};
+    const probability=T>0&&delta<=0?Math.exp(delta/T):0;
+    return {accept:probability>0&&random()<probability,downhill:delta<0,probability};
+  }
   class Walker{
     constructor(bank,anchor,opts={}){
       this.b=bank;this.a=anchor;this.r=rnd(opts.seed??5);this.cover=new Float64Array(bank.words.length);
       this.heading=null;this.fast=null;this.side=1;this.pair=[];this.t=0;this.stall=0;this.visited=new Set();this.trace=[];
-      this.band=0;this.bandStats=bank.bands.map(()=>({n:0,v:0}));this.reward=null;this.anchorReward=null;
-      this.opts={width:60,offset:30,neighbors:64,decay:.04,coverage:.35,learn:.7,threshold:.015,grain:"auto",autoCommit:true,...opts};
+      this.band=0;this.temp=0;this.anchorHistory=[anchor];this.bandStats=bank.bands.map(()=>({n:0,v:0}));this.reward=null;this.anchorReward=null;
+      this.opts={width:60,offset:30,neighbors:64,decay:.04,coverage:.35,learn:.7,threshold:.015,grain:"auto",autoCommit:true,commonUtility:true,balancedPlane:true,temperature:0,heat:1.6,cool:.5,tmax:.25,avoidRevisit:false,...opts};this.temp=this.opts.temperature;
     }
-    setReward(fn){this.reward=fn;this.anchorReward=fn?fn(this.a):null;this.pair=[];this.side=1;this.lastCandidate=null;this.fast=this.heading?this.heading.slice():null;this.stall=0;}
+    setReward(fn){this.reward=fn;this.anchorReward=fn?fn(this.a):null;this.pair=[];this.side=1;this.lastCandidate=null;this.temp=this.opts.temperature;this.anchorHistory=[this.a];this.fast=this.heading?this.heading.slice():null;this.stall=0;}
     chooseBand(){
       if(this.opts.grain!=="auto")return +this.opts.grain;
       const k=Math.floor(this.t/2),s=this.bandStats;
@@ -54,14 +60,23 @@ const Sweep = (function SweepCore(){
       // On repeated empty/unsuccessful pairs explore a different local direction.
       if(this.stall>=3&&this.pair.length===0){axis=cands[Math.floor(this.r()*cands.length)].u.slice();this.fast=axis.slice();this.stall=0;}
       let side=null,best=0;
-      for(const c of cands){const u=sub(c.u,scale(axis,dot(c.u,axis))),n=norm(u);if(n>best){best=n;side=unit(u)}}
+      if(this.opts.balancedPlane){
+        // Centered residuals choose a spread direction, not an extreme raw displacement.
+        // Keep the fast axis unchanged: blind sectors remain possible.
+        const mean=cands.reduce((m,c)=>add(m,c.u),axis.map(()=>0)).map(x=>x/cands.length);
+        for(const c of cands){
+          let v=sub(c.u,mean);v=sub(v,scale(axis,dot(v,axis)));const n=norm(v);
+          if(n>best){best=n;side=unit(v)}
+        }
+      }
+      if(!side)for(const c of cands){const u=sub(c.u,scale(axis,dot(c.u,axis))),n=norm(u);if(n>best){best=n;side=unit(u)}}
       if(!side||best<1e-8){const basis=axis.map((_,j)=>j===axis.reduce((m,x,i)=>Math.abs(x)<Math.abs(axis[m])?i:m,0)?1:0);side=unit(sub(basis,scale(axis,dot(axis,basis))))}
       return {axis,side};
     }
     commit(i,r){
       if(i===this.a)return false;
       this.heading=unit(sub(this.b.x[i],this.b.x[this.a]));
-      this.a=i;this.fast=unit(add(scale(this.fast||this.heading,.65),scale(this.heading,.35)));
+      this.a=i;this.anchorHistory.push(i);this.fast=unit(add(scale(this.fast||this.heading,.65),scale(this.heading,.35)));
       this.anchorReward=this.reward?r:null;this.stall=0;return true;
     }
     step(){
@@ -69,18 +84,26 @@ const Sweep = (function SweepCore(){
       for(let i=0;i<this.cover.length;i++)this.cover[i]*=1-o.decay;
       if(!this.pair.length){this.band=this.chooseBand();this.cands=this.neighborhood(this.band);this.plane=this.frame(this.cands)}
       const {axis,side}=this.plane,sgn=this.side;this.side=-this.side;
+      if(o.temperature<=0)this.temp=0;else this.temp=Math.max(o.temperature,Math.min(Math.max(o.temperature,o.tmax),this.temp));
       const theta=sgn*o.offset*Math.PI/180;
       // The probe is a sector in the local 2D plane, not a cone in 2048D.
-      let hit=null,best=-Infinity;
+      let hit=null,best=-Infinity,total=0;
       for(const c of this.cands){
         const h=dot(c.u,axis),v=dot(c.u,side),length=Math.hypot(h,v);
         if(length<1e-8)continue;
         const delta=Math.atan2(Math.sin(Math.atan2(v,h)-theta),Math.cos(Math.atan2(v,h)-theta));
         if(Math.abs(delta)>o.width*Math.PI/180)continue;
+        if(o.avoidRevisit&&this.anchorHistory.includes(c.i))continue;
         const score=.55*c.sim+.30*length+.15*Math.cos(delta)-o.coverage*this.cover[c.i]+(this.scoreBonus?this.scoreBonus(this.a,c.i):0);
-        if(score>best){best=score;hit={...c,score,delta,prior:this.cover[c.i]}}
+        if(!this.reward&&this.temp>0){
+          // Streaming Gumbel-max samples Boltzmann weights without an extra scan.
+          const u=Math.max(1e-12,Math.min(1-1e-12,this.r()));
+          const draw=score-this.temp*Math.log(-Math.log(u));
+          if(draw>best){best=draw;hit={...c,score,delta,prior:this.cover[c.i]}}
+        }else if(score>best){best=score;hit={...c,score,delta,prior:this.cover[c.i]}}
+        total++;
       }
-      const old=this.a, rec={beat:this.t++,anchor:old,side:sgn,band:this.band,probe:hit?.i??null,score:hit?.score??null,reward:null,commit:false,after:old,axisOffset:angle(this.heading,axis),width:o.width};
+      const old=this.a, rec={beat:this.t++,anchor:old,side:sgn,band:this.band,probe:hit?.i??null,score:hit?.score??null,reward:null,commit:false,after:old,axisOffset:angle(this.heading,axis),width:o.width,temperature:this.temp,eligibleCandidates:total,downhill:false};
       if(hit){this.cover[hit.i]+=1;this.visited.add(hit.i);rec.reward=this.reward?this.reward(hit.i):null;hit.reward=rec.reward;}
       this.pair.push(hit);
       if(this.pair.length===2){
@@ -100,15 +123,27 @@ const Sweep = (function SweepCore(){
             hits.sort((a,b)=>value(b)-value(a));
             utility=value(hits[0]);
           }
-          const h=hits[0], eligible=this.reward?utility>o.threshold:utility>o.threshold;
-          if(o.autoCommit&&eligible){rec.commit=this.commit(h.i,h.reward);rec.commitProbe=h.i;}
+          const h=hits[0];
+          if(this.reward&&o.temperature>0&&utility<=o.threshold)this.temp=Math.min(Math.max(o.temperature,o.tmax),this.temp*o.heat);
+          const d=this.reward?decision(utility,this.temp,o.threshold,this.r):{accept:utility>o.threshold&&h.score>0,downhill:false,probability:utility>o.threshold&&h.score>0?1:0};
+          // A scalar value of one is the evaluator's maximum. No target identity is consulted.
+          const eligible=d.accept||(this.reward&&h.reward>=1-1e-9&&utility>0);
+          rec.acceptProbability=d.probability;rec.rewardDelta=this.reward?utility:null;
+          if(o.autoCommit&&eligible){
+            rec.commit=this.commit(h.i,h.reward);rec.commitProbe=h.i;rec.downhill=rec.commit&&d.downhill;
+            if(this.reward&&utility>0&&o.temperature>0)this.temp=Math.max(o.temperature,this.temp*o.cool);
+          }
+          if(!this.reward&&o.temperature>0){
+            const tail=this.anchorHistory.slice(-8),repetition=1-new Set(tail).size/tail.length;
+            this.temp=repetition>.2||!rec.commit?Math.min(Math.max(o.temperature,o.tmax),this.temp*o.heat):Math.max(o.temperature,this.temp*o.cool);
+          }
           if(!rec.commit)this.stall++;
           this.lastCandidate=h;
-        }else {this.stall++;this.lastCandidate=null;}
+        }else {this.stall++;this.lastCandidate=null;if(o.temperature>0)this.temp=Math.min(Math.max(o.temperature,o.tmax),this.temp*o.heat);}
         const s=this.bandStats[this.band];s.v=s.n?.8*s.v+.2*utility:utility;s.n++;
         this.pair=[];this.side=1;
       }
-      rec.after=this.a;this.trace.push(rec);return rec;
+      rec.after=this.a;rec.temperatureAfter=this.temp;this.trace.push(rec);return rec;
     }
     manualCommit(){
       if(!this.lastCandidate||this.pair.length)return false;
@@ -128,7 +163,13 @@ const Sweep = (function SweepCore(){
     const p=new Walker(b,0,{autoCommit:false,width:180,grain:0,seed:3}),o=oracle(b,9);p.setReward(i=>o.read(i));
     p.step();p.step();if(p.a!==0||angle(p.heading,p.fast)<.0001||o.count()>3)throw Error("scalar feedback steering");
     if(JSON.stringify(fixed)!==JSON.stringify(b.x))throw Error("frozen bank");
-    return {checks:["alternating probe","anchor frozen without commit","coverage decay","grain projection","scalar-only steering / <= 3 queries per pair","frozen bank"],sample:p.trace};
+    if(decision(-.02,0,0,()=>0).accept||!decision(-.02,.1,0,()=>.1).accept||decision(-.02,.1,0,()=>.99).accept)throw Error("temperature acceptance");
+    const warm=new Walker(b,0,{temperature:.1,width:180,grain:0,threshold:0,seed:3});
+    warm.setReward(i=>i===0?1:.99);warm.r=()=>0;warm.step();const wd=warm.step();
+    if(!wd.commit||!wd.downhill||warm.a===0)throw Error("downhill commit wiring");
+    const cold=new Walker(b,0,{temperature:0,width:180,grain:0,threshold:0,seed:3});
+    cold.setReward(i=>i===0?1:.99);cold.step();cold.step();if(cold.a!==0)throw Error("cold commit");
+    return {checks:["downhill acceptance and actual warm/cold commits","alternating probe","anchor frozen without commit","coverage decay","grain projection","scalar-only steering / <= 3 queries per pair","frozen bank"],sample:p.trace};
   }
   return {prepare,demo,oracle,Walker,selfTest};
 })();
