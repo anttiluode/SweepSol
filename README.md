@@ -59,3 +59,22 @@ This is a conceptual port, not a line-for-line import of KyberDyyni1. No claim o
 The initial engine self-test was executed on the synthetic ring during development and passed six workbench checks: alternation, held anchor, coverage decay, different grain dimensions, scalar-only steering with at most three oracle calls for initialization and a pair, and unchanged bank. This is wiring sanity, not a scientific result. The later minor trace and grain-scheduling changes, browser UI and real Qwen export still require an end-to-end run. No actual LLM result has been collected. No competitive kill gates.
 
 The important question for a later experiment is whether this kind of reader can discover useful relationships under an independently defined reward, rather than merely climb a cosine surface in a map that already contains the answer. Retargeting on a hidden cosine goal is an initial workbench for that question, not its solution.
+
+
+## Swarm — many readers, one frozen map
+
+**New:** open [swarm.html](swarm.html) directly in Edge/Chrome after pulling, and load your existing bank.json. No new Qwen pass. Choose Forage, Random hidden goals (learn roads), Common hidden goal (learn roads), or Common hidden goal (frozen roads). Up to 16 simultaneous SweepSol walkers, each with its own anchor, fast axis, grain and private coverage. Shared coverage is updated after each round, so every active walker sees the same previous-round marks. Shared coverage and road strength are separate knobs; set both to zero for independent readers. New colonies reset coverage but retain roads. The viewer plots the first two normalized cached PC coordinates, which are only a projection; the actual search uses higher-dimensional cached vectors.
+
+Roads are directed committed edges, credited only after an exact target has become the anchor. Cycles are erased from the credited path (not the work count). Successful paths leave a slow memory; no model weights or cached vectors are modified. Each reader sees only scalar cosine warmth for its anchor and selected probes, and uses the existing alternating sector and commit policy. There is no hard-coded semantic word list in the controller. Shared observations and interior nodes of successful paths are logged separately, not assumed to be true semantic bridges.
+
+### Matched road transfer experiment (Node.js)
+
+```powershell
+node swarm.js --self-test
+node swarm.js --bank demo --train 8 --test 8 --lanes 4 --beats 80
+node swarm.js --bank bank.json --train 32 --test 32 --lanes 4 --beats 160 --horizon 32 --out swarm-qwen.json
+```
+
+Training pairs are sampled reproducibly; the same unordered endpoint pair cannot occur in both training and test. Endpoints and intermediate words can recur across the split. Training learns roads from successful paths only. The test runs exactly the same ordered pairs, seeds, shared coverage, local horizon and beat budget twice, with road preference zero and with the learned roads enabled. The road table is frozen in both test arms. Read success counts, scalar calls for all trials, budgeted beats, and paired road-only / baseline-only successes together (successful-only means are selection-biased). The run records all paths and probe traces, the split, and the complete road table. The local horizon is per grain, not a fixed global graph. Neighbour discovery still scans the bank on cache misses, so scalar calls are not a total compute or latency measure.
+
+This is exploratory; it is not a claim of improvement, nor a test of independent task rewards. Random pairs may be disconnected or hard, and a sparse global road table may generalize poorly or distract the walker. The small synthetic self-test (4 train/4 test pairs) returned 2 training successes and 3/4 successes in each test arm with identical paired outcomes. The eight wiring checks passed, but real Qwen swarm results and browser end-to-end behavior are not yet measured here. The older single-walker defaults are unchanged; the swarm opts into common-space forage utility to avoid cross-band raw cosine comparisons.
